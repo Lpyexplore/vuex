@@ -1,4 +1,4 @@
-import { isObject } from './util'
+import { isObject } from './util.js'
 
 /**
  * Reduce the code which written in Vue.js for getting the state.

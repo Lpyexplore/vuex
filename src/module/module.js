@@ -1,4 +1,4 @@
-import { forEachValue } from '../util'
+import { forEachValue } from '../util.js'
 
 // 定义了Vuex中的 Module 类，包含了state、mutations、getters、actions、modules
 export default class Module {

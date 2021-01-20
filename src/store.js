@@ -1,7 +1,7 @@
-import applyMixin from './mixin'
-import devtoolPlugin from './plugins/devtool'
-import ModuleCollection from './module/module-collection'
-import { forEachValue, isObject, isPromise, assert, partial } from './util'
+import applyMixin from './mixin.js'
+import devtoolPlugin from './plugins/devtool.js'
+import ModuleCollection from './module/module-collection.js'
+import { forEachValue, isObject, isPromise, assert, partial } from './util.js'
 
 let Vue // bind on install
 
@@ -338,8 +338,8 @@ function resetStoreVM (store, state, hot) {
   const oldVm = store._vm
 
   store.getters = {}    // 在实例store上设置getters对象
-  // reset local getters cache
-  store._makeLocalGettersCache = Object.create(null)
+  
+  store._makeLocalGettersCache = Object.create(null)  // 清空本地缓存
   const wrappedGetters = store._wrappedGetters
   const computed = {}
   // 遍历getters，将每一个getter注册到store.getters，访问对应getter时会去vm上访问对应的computed

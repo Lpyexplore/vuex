@@ -1,5 +1,5 @@
-import Module from './module'
-import { assert, forEachValue } from '../util'
+import Module from './module.js'
+import { assert, forEachValue } from '../util.js'
 
 export default class ModuleCollection {
   constructor (rawRootModule) {
