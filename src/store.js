@@ -92,7 +92,7 @@ export class Store {
     // 判断store是否未严格模式。true: 所有的state都必须经过mutations来改变
     this.strict = strict
 
-    // 将根模块的state作为store实例的state属性
+    // 将根模块的state赋值给state变量
     const state = this._modules.root.state
 
     // 从根模块开始，递归完善各个模块的信息
@@ -382,7 +382,7 @@ function resetStoreVM (store, state, hot) {
 // 注册完善各个模块内的信息
 function installModule (store, rootState, path, module, hot) {
   const isRoot = !path.length  // 是否为根模块
-  const namespace = store._modules.getNamespace(path)  // 获取当前模块的路径，格式为：second/ 或 second/third/
+  const namespace = store._modules.getNamespace(path)  // 获取当前模块的命名空间，格式为：second/ 或 second/third/
 
   // 如果当前模块设置了namespaced 或 继承了父模块的namespaced，则在modulesNamespaceMap中存储一下当前模块
   if (module.namespaced) {

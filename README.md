@@ -411,7 +411,322 @@ export default class Module {
 
 `this.state` 对应的就是 `this._rawModule` 中的 `state` ;
 
- 这是整个构造函数中执行的操作，我们可以看到，在生成一个 `Module` 类的时候，其只定义了 `state` 属性，而 `mutations` 、`getters` 、`actions` 、`modules` 都是没有被定义的，即例如无法通过 `Module.mutations` 获取到该模块所有的 `mutations` 方法，那么这些方法都是在何时被定义的呢？自然是等模块全部都收集完毕以后才进行的操作，因为 `vuex` 中的嵌套模块
+ 这是整个构造函数中执行的操作，我们可以看到，在生成一个 `Module` 类的时候，其只定义了 `state` 属性，而 `mutations` 、`getters` 、`actions` 、`modules` 都是没有被定义的，即例如现在是无法通过 `Module.mutations` 获取到该模块所有的 `mutations` 方法，那么这些方法都是在何时被定义的呢？自然是等模块全部都收集完毕以后才进行的操作，因为 `vuex` 中的嵌套模块可能会存在命名空间 `namespaced` 
+
+#### 2.2 注册模块
+
+到此为止，各个模块的类都创建好了，那么继续回到 `./src/store.js` 的 `constructor` 构造函数中
+
+```js
+// 将 dispatch 和 commit 方法绑定到 Store 的实例上，避免后续使用dispatch或commit时改变了this指向
+const store = this
+const { dispatch, commit } = this
+this.dispatch = function boundDispatch (type, payload) {
+  return dispatch.call(store, type, payload)
+}
+this.commit = function boundCommit (type, payload, options) {
+  return commit.call(store, type, payload, options)
+}
+
+// 判断store是否未严格模式。true: 所有的state都必须经过mutations来改变
+this.strict = strict
+
+// 将根模块的state赋值给state变量
+const state = this._modules.root.state
+```
+
+这段代码首先对 `Store` 实例上的 `dispatch` 和 `commit` 方法进行了一层包装，即通过 `call` 将这两个方法的作用对象指向当前的 `Store` 实例，这样就能防止后续我们操作时，出现 `this.$store.dispatch.call(obj, 1)` 类似的情况而报错
+
+ `this.strict` 是用于判断是否是严格模式。因为 `vuex` 中，建议所有的 `state` 变量的变化都必须经过 `mutations` 方法，因为这样才能被 `devtool` 所记录下来，所以在严格模式下，未经过 `mutations` 而直接改变了 `state` 的值，开发环境下会发出警告⚠️
+
+`const state = this._modules.root.state`  获取的是根模块的 `state` ，用于后续的一些操作
+
+一切都准备就绪了，下面就开始为每个模块注册信息了
+
+```js
+// 从根模块开始，递归完善各个模块的信息
+installModule(this, state, [], this._modules.root)
+```
+
+调用了 `installModule` 方法，并将 `store` 实例对象 、`state` 属性 、路径 、根模块对象依次作为参数进行传递
+
+```js
+// 注册完善各个模块内的信息
+function installModule (store, rootState, path, module, hot) {
+  const isRoot = !path.length  // 是否为根模块
+  const namespace = store._modules.getNamespace(path)  // 获取当前模块的命名空间，格式为：second/ 或 second/third/
+
+  // 如果当前模块设置了namespaced 或 继承了父模块的namespaced，则在modulesNamespaceMap中存储一下当前模块
+  if (module.namespaced) {
+    if (store._modulesNamespaceMap[namespace] && __DEV__) {
+      console.error(`[vuex] duplicate namespace ${namespace} for the namespaced module ${path.join('/')}`)
+    }
+    store._modulesNamespaceMap[namespace] = module
+  }
+
+  // 如果不是根模块，将当前模块的state注册到其父模块的state上
+  if (!isRoot && !hot) {
+    const parentState = getNestedState(rootState, path.slice(0, -1)) // 获取父模块的state
+    const moduleName = path[path.length - 1]   // 当前模块的名称
+    store._withCommit(() => {
+      if (__DEV__) {
+        if (moduleName in parentState) {
+          console.warn(
+            `[vuex] state field "${moduleName}" was overridden by a module with the same name at "${path.join('.')}"`
+          )
+        }
+      }
+      // 将当前模块的state注册在父模块的state上，并且是响应式的
+      Vue.set(parentState, moduleName, module.state)
+    })
+  }
+
+  // 设置当前模块的上下文context
+  const local = module.context = makeLocalContext(store, namespace, path)
+
+  // 注册模块的所有mutations
+  module.forEachMutation((mutation, key) => {
+    const namespacedType = namespace + key     // 例如：first/second/mutations1
+    registerMutation(store, namespacedType, mutation, local)
+  })
+
+  // 注册模块的所有actions
+  module.forEachAction((action, key) => {
+    /**
+     * actions有两种写法：
+     * 
+     * actions: {
+     *    AsyncAdd (context, payload) {...},   // 第一种写法
+     *    AsyncDelete: {                       // 第二种写法
+     *      root: true,
+     *      handler: (context, payload) {...}
+     *    } 
+     * }
+     */
+    const type = action.root ? key : namespace + key   // 判断是否需要在命名空间里注册一个全局的action
+    const handler = action.handler || action          // 获取actions对应的函数
+    registerAction(store, type, handler, local)   
+  })
+
+  // 注册模块的所有getters
+  module.forEachGetter((getter, key) => {
+    const namespacedType = namespace + key
+    registerGetter(store, namespacedType, getter, local)
+  })
+
+  // 递归注册子模块
+  module.forEachChild((child, key) => {
+    installModule(store, rootState, path.concat(key), child, hot)
+  })
+}
+```
+
+`const namespace = store._modules.getNamespace(path)` 是将路径 `path` 作为参数， 调用 `ModuleCollection` 类实例上的 `getNamespace` 方法来获取当前注册对象的命名空间的
+
+```js
+/**
+* 根据模块是否有命名空间来设定一个路径名称
+* 例如：A为父模块，B为子模块，C为子孙模块
+* 1. 若B模块命名空间为second,C模块未设定命名空间时; C模块继承了B模块的命名空间，为 second/
+* 2. 若B模块未设定命名空间, B模块命名空间为third; 则此时B模块继承的是A模块的命名空间，而C模块的命名空间路径为 third/
+*/
+getNamespace (path) {
+  let module = this.root
+  return path.reduce((namespace, key) => {
+    module = module.getChild(key)   // 获取子模块
+    return namespace + (module.namespaced ? key + '/' : '')
+  }, '')
+}
+```
+
+从这可以看出，未指定命名空间的模块会继承父模块的命名空间
+
+```js
+  // 如果当前模块设置了namespaced 或 继承了父模块的namespaced，则在modulesNamespaceMap中存储一下当前模块
+if (module.namespaced) {
+  if (store._modulesNamespaceMap[namespace] && __DEV__) {
+    console.error(`[vuex] duplicate namespace ${namespace} for the namespaced module ${path.join('/')}`)
+  }
+  store._modulesNamespaceMap[namespace] = module
+}
+```
+
+这段代码是将所有存在命名空间的模块记录在 `store._modulesNamespaceMap` 中，便于之后的辅助函数可以调用（这里还未提到辅助函数，可以先不管，到时候回头来看）
+
+##### 2.2.1 注册模块的state
+
+```js
+// 如果不是根模块，将当前模块的state注册到其父模块的state上
+if (!isRoot && !hot) {
+  const parentState = getNestedState(rootState, path.slice(0, -1)) // 获取父模块的state
+  const moduleName = path[path.length - 1]   // 当前模块的名称
+  store._withCommit(() => {
+    if (__DEV__) {
+      if (moduleName in parentState) {
+        console.warn(
+          `[vuex] state field "${moduleName}" was overridden by a module with the same name at "${path.join('.')}"`
+        )
+      }
+    }
+    // 将当前模块的state注册在父模块的state上，并且是响应式的
+    Vue.set(parentState, moduleName, module.state)
+  })
+}
+```
+
+这段代码主要是将非根模块的 `state` 挂载到父模块的 `state` 上
+
+`const parentState = getNestedState(rootState, path.slice(0, -1))` 根据当前的模块路径，从根模块的 `state` 开始找，最终找到当前模块的父模块的 `state`，可以看一下 `getNestedState` 方法内部的具体实现
+
+```js
+// 获取到嵌套的模块中的state
+function getNestedState (state, path) {
+  return path.reduce((state, key) => state[key], state)
+}
+```
+
+`const moduleName = path[path.length - 1]` 从路径 `path` 中将当前模块的名称提取出来
+
+```js
+store._withCommit(() => {
+  if (__DEV__) {
+    if (moduleName in parentState) {
+      console.warn(
+        `[vuex] state field "${moduleName}" was overridden by a module with the same name at "${path.join('.')}"`
+      )
+    }
+  }
+  // 将当前模块的state注册在父模块的state上，并且是响应式的
+  Vue.set(parentState, moduleName, module.state)
+})
+```
+
+这段代码中最主要的部分就是 `Vue.set(parentState, moduleName, module.state)` ，作用就是调用了 `Vue` 的 `set` 方法将当前模块的 `state` 响应式地添加到了父模块的 `state` 上，这是因为在之后我们会看到 `state` 会被放到一个新的 `Vue` 实例的 `data` 中，所以这里不得不使用 `Vue` 的 `set` 方法来响应式地添加
+
+同样的，从这段代码中我们也可以知道了为什么平时在获取子模块上 `state` 的属性时，是通过 `this.$store.state.ModuleA.name` 这样的形式来获取的了
+
+##### 2.2.2 生成模块调用上下文
+
+```js
+// 设置当前模块的上下文context
+const local = module.context = makeLocalContext(store, namespace, path)
+```
+
+这行代码也可以说是非常核心的一段代码了，它根据命名空间为每个模块创建了一个属于该模块调用的上下文，并将该上下文赋值了给了该模块的 `context` 属性
+
+接下来看一下这个上下文是如何创建的吧
+
+```js
+// 若设置了命名空间则创建一个本地的commit、dispatch方法，否则将使用全局的store
+function makeLocalContext (store, namespace, path) {
+  const noNamespace = namespace === ''  
+
+  const local = {
+    dispatch: noNamespace ? store.dispatch : (_type, _payload, _options) => {
+      const args = unifyObjectStyle(_type, _payload, _options)
+      const { payload, options } = args
+      let { type } = args
+
+      if (!options || !options.root) {  // 若传入了第三个参数设置了root:true，则派发的是全局上对应的的actions方法
+        type = namespace + type
+        if (__DEV__ && !store._actions[type]) {
+          console.error(`[vuex] unknown local action type: ${args.type}, global type: ${type}`)
+          return
+        }
+      }
+
+      return store.dispatch(type, payload)
+    },
+
+    commit: noNamespace ? store.commit : (_type, _payload, _options) => {
+      const args = unifyObjectStyle(_type, _payload, _options)
+      const { payload, options } = args
+      let { type } = args
+
+      if (!options || !options.root) {   // 若传入了第三个参数设置了root:true，则派发的是全局上对应的的mutations方法
+        type = namespace + type
+        if (__DEV__ && !store._mutations[type]) {
+          console.error(`[vuex] unknown local mutation type: ${args.type}, global type: ${type}`)
+          return
+        }
+      }
+
+      store.commit(type, payload, options)
+    }
+  }
+
+  /**
+   * 若没有设定命名空间，则直接读取store.getters（store.getters已经挂载到vue实例的computed上了）;
+   * 若设定了命名空间，则从本地缓存_makeLocalGettersCache中读取getters
+   */
+  Object.defineProperties(local, {
+    getters: {
+      get: noNamespace
+        ? () => store.getters    
+        : () => makeLocalGetters(store, namespace)
+    },
+    state: {
+      get: () => getNestedState(store.state, path)
+    }
+  })
+
+  return local
+}
+```
+
+`local` 这个变量存储的就是一个模块的上下文。
+
+先来看其第一个属性 `dispatch` ，当该模块没有设置命名空间时，调用该上下文的 `dispatch` 方法时会直接调用 `sotre.dispatch` ，即调用了根模块的 `dispatch` 方法 ; 而存在命名空间时，会先判断相应的命名空间，以此来决定调用哪个 `dispatch` 方法
+
+`if (!options || !options.root)` 是判断调用 `dispatch` 方法时有没有传入第三个参数 `{root: true}` ，若有则表示调用全局根模块上对应的的 `dispatch` 方法
+
+那么同样的，`local` 中的 `commit` 属性就类似于 `dispatch` ，这里就不多说了
+
+然后最后通过 `Object.defineProperties` 方法对 `local` 的 `getters` 属性和 `state` 属性设置了一层获取代理，等后续对其访问时，才会进行处理。例如，访问 `getters` 属性时，先判断是否存在命名空间，若没有，则直接返回 `store.getters` ; 否则的话，根据命名空间创建一个本地的 `getters` 缓存，根据这个缓存来获取对应的 `getters` ，来看一下代码
+
+```js
+// 创建本地的getters缓存
+function makeLocalGetters (store, namespace) {
+  // 若缓存中没有指定的getters，则创建一个新的getters缓存到__makeLocalGettersCache中
+  if (!store._makeLocalGettersCache[namespace]) {
+    const gettersProxy = {}
+    const splitPos = namespace.length
+    Object.keys(store.getters).forEach(type => {
+      // 如果store.getters中没有与namespace匹配的getters，则不进行任何操作
+      if (type.slice(0, splitPos) !== namespace) return
+
+      // 获取本地getters名称
+      const localType = type.slice(splitPos)
+
+      // 对getters添加一层代理
+      Object.defineProperty(gettersProxy, localType, {
+        get: () => store.getters[type],
+        enumerable: true
+      })
+    })
+    // 把代理过的getters缓存到本地
+    store._makeLocalGettersCache[namespace] = gettersProxy
+  }
+
+  return store._makeLocalGettersCache[namespace]
+}
+```
+
+当存在命名空间时访问 `local.getters` ，首先会去 `store._makeLocalGettersCache` 查找是否有对应的 `getters` 缓存，若没有，则创建一个 `gettersProxy` ，在 `store.getters` 上找到对应的 `getters` ，然后用 `Object.defineProperty` 对 `gettersProxy` 做一层处理，即当访问 `local.getters.func` 时，相当于访问了 `store.getters['first/func']` ，这样做一层缓存，下一次访问该 `getters` 时，就不会重新遍历 `store.getters` 了 ; 若有缓存，则直接从缓存中获取
+
+上下文已经创建好了，接下来就是注册 `mutations` 、`actions` 、`getters` 了
+
+##### 2.2.3 注册模块的mutations
+
+```js
+// 注册模块的所有mutations
+module.forEachMutation((mutation, key) => {
+  const namespacedType = namespace + key     // 例如：first/second/mutations1
+  registerMutation(store, namespacedType, mutation, local)
+})
+```
+
+
 
 ... 未完待续
 
