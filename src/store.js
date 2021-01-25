@@ -111,6 +111,7 @@ export class Store {
     }
   }
 
+  // 访问state
   get state () {
     return this._vm._data.$$state
   }
@@ -241,7 +242,7 @@ export class Store {
     return this._watcherVM.$watch(() => getter(this.state, this.getters), cb, options)
   }
 
-  // 更新一下state
+  // 在store._committing = true 的状态下更新一下state
   replaceState (state) {
     this._withCommit(() => {
       this._vm._data.$$state = state
@@ -320,7 +321,7 @@ function genericSubscribe (fn, subs, options) {
   }
 }
 
-// 重置store，即注册模块、挂载state等操作
+// 重置store，即注册模块、生成vm等操作
 function resetStore (store, hot) {
   store._actions = Object.create(null)
   store._mutations = Object.create(null)
@@ -333,7 +334,7 @@ function resetStore (store, hot) {
   resetStoreVM(store, state, hot)
 }
 
-// 初始化vm，将getters
+// 初始化vm
 function resetStoreVM (store, state, hot) {
   const oldVm = store._vm
 
@@ -427,7 +428,7 @@ function installModule (store, rootState, path, module, hot) {
      *    AsyncAdd (context, payload) {...},   // 第一种写法
      *    AsyncDelete: {                       // 第二种写法
      *      root: true,
-     *      handler: (context, payload) {...}
+     *      handler(context, payload) {...}
      *    } 
      * }
      */
@@ -530,7 +531,7 @@ function makeLocalGetters (store, namespace) {
   return store._makeLocalGettersCache[namespace]
 }
 
-// 注册mutations方法，接收两个参数：上下文中的state、传入的参数payload
+// 注册mutations方法
 function registerMutation (store, type, handler, local) {
   const entry = store._mutations[type] || (store._mutations[type] = [])  // 通过store._mutations 记录所有注册的mutations
   entry.push(function wrappedMutationHandler (payload) {
