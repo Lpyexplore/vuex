@@ -9,7 +9,7 @@
 
 `Vuex`也是我第一次阅读源码的库，本仓库会记录下我阅读源码的全过程以及经验分享，希望可以帮助到大家～
 
-# 进度（7/15）
+# 进度（8/15）
 **【2021年】** 每天阅读或总结整理2小时（时间线中若未出现的日期，可能是因为其它事情耽搁了）
 
 > **Start**   1月15日 ：熟悉了 `Modules` 的注册流程
@@ -25,6 +25,8 @@
 >1月23日：编写了部分源码的阅读文档
 
 > 1月25日：编写了绝大部分源码的阅读文档
+
+> 1月26日：了解了 `Vuex` 的 `install` 方法的具体实现，并更新了部分源码阅读文档
 
 # 源码解析
 
@@ -1300,21 +1302,580 @@ function resetStore (store, hot) {
 
 将所有的状态都清空，然后重新执行一边 `installModule` 和 `resetStoreVM` ，这一般在模块结构变化以后调用，例如某个模块被卸载
 
-### 4. 辅助函数
+### 4. install 注册
 
-`store`实例生成并且也 `install` 到 `Vue` 上了，看一下入口文件中只剩下辅助函数了，它们有 `mapState` 、`mapGetters` 、`mapMutations` 、`mapActions` ，进到相应的文件 `./helpers.js` 中看一下
+`Store` 类的所有实现都了解完了，再来看一下入口文件里还有什么，突然发现忘记看一下非常重要的 `install` 方法了，根据 `install` 方法的导入路径找到相应的函数：
 
 ```js
-
+// 提供install方法
+export function install (_Vue) {
+  if (Vue && _Vue === Vue) {
+    if (__DEV__) {
+      console.error(
+        '[vuex] already installed. Vue.use(Vuex) should be called only once.'
+      )
+    }
+    return
+  }
+  Vue = _Vue
+  applyMixin(Vue)
+}
 ```
 
+当我们调用 `Vue.use(vuex)` 时，调用这个方法，先判断 `vuex` 是否已被注册，若已被注册，则不执行任何操作 ; 若没有被注册，则调用 `applyMixin` 方法，现在移步到 `./mixin.js` 文件：
+
+```js
+export default function (Vue) {
+  const version = Number(Vue.version.split('.')[0])
+
+  // 2.x版本直接通过全局混入Vue.mixin的方式挂载store
+  if (version >= 2) {
+    Vue.mixin({ beforeCreate: vuexInit })
+  } else {
+    // 兼容1.x版本
+    const _init = Vue.prototype._init
+    Vue.prototype._init = function (options = {}) {
+      options.init = options.init
+        ? [vuexInit].concat(options.init)
+        : vuexInit
+      _init.call(this, options)
+    }
+  }
+
+  // 将vuex混入到$options中
+  function vuexInit () {
+    // 获取当前组件的 $options
+    const options = this.$options
+    // 若当前组件的$options上已存在store，则将$options.store赋值给this.$store（一般是用于根组件的）
+    if (options.store) {
+      this.$store = typeof options.store === 'function'
+        ? options.store()
+        : options.store
+    } 
+    // 当前组件的$options上没有store，则获取父组件上的$store，即$options.parent.$store，并将其赋值给this.$store（一般用于子组件）
+    else if (options.parent && options.parent.$store) {
+      this.$store = options.parent.$store
+    }
+  }
+}
+```
+
+`applyMixin` 方法先判断了 `Vue` 的版本号，主要做的是一个向下兼容 `Vue 1.x` 的版本，这里我对 `Vue 1.x` 的版本不太熟悉，所以就直接看 `Vue 2.x` 版本的处理方式吧
+
+通过 `Vue.minxin` 方法做了一个全局的混入，在每个组件 `beforeCreate` 生命周期时会调用 `vuexInit` 方法，该方法处理得非常巧妙，首先获取当前组件的 `$options` ，判断当前组件的 `$options` 上是否有 `sotre` ，若有则将 `store` 赋值给当前组件，即 `this.$store` ，这个一般是判断根组件的，因为只有在初始化 `Vue` 实例的时候我们才手动传入了 `store` ; 若 `$options` 上没有 `store` ，则代表当前不是根组件，所以我们就去父组件上获取，并赋值给当前组件，即当前组件也可以通过 `this.$store` 访问到 `store` 实例了
+
+这里不得不感叹，这个处理方式太棒了。
+
+### 5. 辅助函数
+
+`store`实例生成并且也 `install` 到 `Vue` 上了，看一下入口文件中只剩下辅助函数了，它们有 `mapState` 、`mapGetters` 、`mapMutations` 、`mapActions` 、`createNamespacedHelpers` ，进到相应的文件 `./helpers.js` 中看一下
+
+```js
+import { isObject } from './util.js'
+
+export const mapState = normalizeNamespace((namespace, states) => {
+  const res = {}
+  if (__DEV__ && !isValidMap(states)) {
+    console.error('[vuex] mapState: mapper parameter must be either an Array or an Object')
+  }
+  normalizeMap(states).forEach(({ key, val }) => {
+    res[key] = function mappedState () {
+      let state = this.$store.state
+      let getters = this.$store.getters
+      if (namespace) {
+        const module = getModuleByNamespace(this.$store, 'mapState', namespace)
+        if (!module) {
+          return
+        }
+        state = module.context.state
+        getters = module.context.getters
+      }
+      return typeof val === 'function'
+        ? val.call(this, state, getters)
+        : state[val]
+    }
+    // mark vuex getter for devtools
+    res[key].vuex = true
+  })
+  return res
+})
 
 
+export const mapMutations = normalizeNamespace((namespace, mutations) => {
+  const res = {}
+  if (__DEV__ && !isValidMap(mutations)) {
+    console.error('[vuex] mapMutations: mapper parameter must be either an Array or an Object')
+  }
+  normalizeMap(mutations).forEach(({ key, val }) => {
+    res[key] = function mappedMutation (...args) {
+      // Get the commit method from store
+      let commit = this.$store.commit
+      if (namespace) {
+        const module = getModuleByNamespace(this.$store, 'mapMutations', namespace)
+        if (!module) {
+          return
+        }
+        commit = module.context.commit
+      }
+      return typeof val === 'function'
+        ? val.apply(this, [commit].concat(args))
+        : commit.apply(this.$store, [val].concat(args))
+    }
+  })
+  return res
+})
 
 
+export const mapGetters = normalizeNamespace((namespace, getters) => {
+  const res = {}
+  if (__DEV__ && !isValidMap(getters)) {
+    console.error('[vuex] mapGetters: mapper parameter must be either an Array or an Object')
+  }
+  normalizeMap(getters).forEach(({ key, val }) => {
+    // The namespace has been mutated by normalizeNamespace
+    val = namespace + val
+    res[key] = function mappedGetter () {
+      if (namespace && !getModuleByNamespace(this.$store, 'mapGetters', namespace)) {
+        return
+      }
+      if (__DEV__ && !(val in this.$store.getters)) {
+        console.error(`[vuex] unknown getter: ${val}`)
+        return
+      }
+      return this.$store.getters[val]
+    }
+    // mark vuex getter for devtools
+    res[key].vuex = true
+  })
+  return res
+})
 
 
-... 未完待续
+export const mapActions = normalizeNamespace((namespace, actions) => {
+  const res = {}
+  if (__DEV__ && !isValidMap(actions)) {
+    console.error('[vuex] mapActions: mapper parameter must be either an Array or an Object')
+  }
+  normalizeMap(actions).forEach(({ key, val }) => {
+    res[key] = function mappedAction (...args) {
+      // get dispatch function from store
+      let dispatch = this.$store.dispatch
+      if (namespace) {
+        const module = getModuleByNamespace(this.$store, 'mapActions', namespace)
+        if (!module) {
+          return
+        }
+        dispatch = module.context.dispatch
+      }
+      return typeof val === 'function'
+        ? val.apply(this, [dispatch].concat(args))
+        : dispatch.apply(this.$store, [val].concat(args))
+    }
+  })
+  return res
+})
+
+/**
+ * Rebinding namespace param for mapXXX function in special scoped, and return them by simple object
+ * @param {String} namespace
+ * @return {Object}
+ */
+export const createNamespacedHelpers = (namespace) => ({
+  mapState: mapState.bind(null, namespace),
+  mapGetters: mapGetters.bind(null, namespace),
+  mapMutations: mapMutations.bind(null, namespace),
+  mapActions: mapActions.bind(null, namespace)
+})
+
+
+function normalizeMap (map) {
+  if (!isValidMap(map)) {
+    return []
+  }
+  return Array.isArray(map)
+    ? map.map(key => ({ key, val: key }))
+    : Object.keys(map).map(key => ({ key, val: map[key] }))
+}
+
+function isValidMap (map) {
+  return Array.isArray(map) || isObject(map)
+}
+
+function normalizeNamespace (fn) {
+  return (namespace, map) => {
+    if (typeof namespace !== 'string') {
+      map = namespace
+      namespace = ''
+    } 
+    else if (namespace.charAt(namespace.length - 1) !== '/') {
+      namespace += '/'
+    }
+    return fn(namespace, map)
+  }
+}
+
+function getModuleByNamespace (store, helper, namespace) {
+  const module = store._modulesNamespaceMap[namespace]
+  if (__DEV__ && !module) {
+    console.error(`[vuex] module namespace not found in ${helper}(): ${namespace}`)
+  }
+  return module
+}
+```
+
+整个文件里东西非常多，但我们很明确地知道，我们主要看的就是那几个辅助函数，观察发现，每个辅助函数都会先调用 `normalizeNamespace` 函数进行处理，那么我们就先看看这个函数做了什么：
+
+```js
+function normalizeNamespace (fn) {
+  return (namespace, map) => {
+    if (typeof namespace !== 'string') {
+      map = namespace
+      namespace = ''
+    } 
+    else if (namespace.charAt(namespace.length - 1) !== '/') {
+      namespace += '/'
+    }
+    return fn(namespace, map)
+  }
+}
+```
+
+根据函数名的字面意思知道这应该是根据不同的调用方法，标准化命名空间的。
+
+首先返回一个函数，接收两个参数，即 `namespace` 和 `map` ，这也是我们调用辅助函数时可以传入的两个参数 ;
+
+然后判断 `namespace` 是否为字符串形式，若不是字符串，则表示是普通的调用方式，例如：
+
+```
+mapMutations(['first/second/foo', 'first/second/bar'])
+
+mapMutations({
+   foo: 'first/second/foo',
+   bar: 'first/second/bar',
+})
+```
+
+这种情况，就直接将第一个参数 `namespace` 赋值给映射变量 `map` ，而 `namespace` 设为空
+
+若是字符串的话，则表示调用的是带命名空间的绑定函数的，例如：
+
+```js
+mapState('first/second', ['foo', 'bar'])
+
+mapState('first/second', {
+  foo: 'foo',
+  bar: 'bar',
+})
+```
+
+处理好这两种不同的调用方式以后，调用一下 `fn` ，并将 `namespace` 和 `map` 作为参数
+
+那么就先从 `mapState` 开始看吧
+
+##### 5.1 mapState
+
+```js
+export const mapState = normalizeNamespace((namespace, states) => {
+  const res = {}
+  if (__DEV__ && !isValidMap(states)) {
+    console.error('[vuex] mapState: mapper parameter must be either an Array or an Object')
+  }
+  normalizeMap(states).forEach(({ key, val }) => {
+    res[key] = function mappedState () {
+      let state = this.$store.state
+      let getters = this.$store.getters
+      if (namespace) {
+        const module = getModuleByNamespace(this.$store, 'mapState', namespace)
+        if (!module) {
+          return
+        }
+        state = module.context.state
+        getters = module.context.getters
+      }
+      return typeof val === 'function'
+        ? val.call(this, state, getters)
+        : state[val]
+    }
+    // mark vuex getter for devtools
+    res[key].vuex = true
+  })
+  return res
+})
+```
+
+这里的 `namespace` 是一个字符串，`states` 是我们刚才处理好的映射变量 `map`
+
+首先创建一个空对象 `res` ，这是我们最后处理好要返回的变量 ;
+
+然后通过 `isValidMap` 方法判断 `map` 是否符合要求，即是否是数组或对象 ;
+
+再然后调用了 `normalizeMap` 方法处理了变量 `states` ，从字面意义上来看，这是用来标准化该变量的，因为毕竟有可能是数组又有可能是对象嘛，所以要统一一下。来看一下 `normalizeMap` 方法的实现：
+
+```js
+function normalizeMap (map) {
+  if (!isValidMap(map)) {
+    return []
+  }
+  return Array.isArray(map)
+    ? map.map(key => ({ key, val: key }))
+    : Object.keys(map).map(key => ({ key, val: map[key] }))
+}
+```
+
+首先仍然要先判断 `map` 是否合法，若不合法，则返回空数组，避免后续的代码报错 ;
+
+然后判断 `map` 是否为数组，若是数组，则遍历 `map` 进行处理：
+
+```js
+将 [1, 2, 3] 变成 [{key: 1, val: 1}, {key: 2, val: 2}, {key: 3, val: 3}]
+```
+
+若 `map` 不是数组，则一定为对象，那么同样也要把其处理成跟上面一样的格式：
+
+```js
+将 {a: 1, b: 2, c: 3} 变成 [{key: a, val: 1}, {key: b, val: 2}, {key: c, val: 3}]
+```
+
+处理好了以后就直接返回，在得到标准化以后的 `map` 后要对其进行 `forEach` 遍历，将遍历到的每一个对象经过处理后存放在 `res` 中，即 `res[key] = function mappedState() {...}` ，来看一下这个 `mappedState` 里做了什么处理
+
+首先获取一下根模块上的 `state` 和 `getters`
+
+```js
+// 获取根模块的 state 、getters
+let state = this.$store.state
+let getters = this.$store.getters
+```
+
+然后判断是否存在命名空间，即 `namespace` 是否为空，若为空，则不做任何处理 ; 否则调用 `getModuleByNamespace` 方法获取到 `namespace` 对应的模块 `module` 
+
+```js
+function getModuleByNamespace (store, helper, namespace) {
+  const module = store._modulesNamespaceMap[namespace]
+  if (__DEV__ && !module) {
+    console.error(`[vuex] module namespace not found in ${helper}(): ${namespace}`)
+  }
+  return module
+}
+```
+
+可以看到 `store._modulesNamespaceMap` 终于派上了用场，在生成 `Store` 实例注册所有模块的时候，将带有命名空间的模块都存储在了该变量上，原来是在这里用上了
+
+然后将刚才声明的变量 `state` 和 `getters` 替换成 `module` 对应上下文中的 `state` 和 `getters` 
+
+```js
+if (namespace) {
+  // 获取命名空间namespace对应的模块
+  const module = getModuleByNamespace(this.$store, 'mapState', namespace)
+  if (!module) {
+    return
+  }
+  // 将 state 、getters 变成该模块上下文中的 state 、getters
+  state = module.context.state
+  getters = module.context.getters
+}
+```
+
+这个 `context` 也是非常的巧妙，在注册模块的时候，获取到该模块的上下文的同时，还将其存储了一下，即：
+
+```js
+const local = module.context = makeLocalContext(store, namespace, path)
+```
+
+之前看到的时候不知道有啥用，但在这里看到后，觉得真的非常得赞 👍
+
+确定好了 `state` 和 `getters` 的值，最后就可以返回值了
+
+```js
+return typeof val === 'function'
+  ? val.call(this, state, getters)
+	: state[val]
+```
+
+这里还做了一层处理是因为要处理两种不同的方式，例如：
+
+```js
+mapState({
+  foo: state => state.foo,
+  bar: 'bar'
+})
+```
+
+在这里我又发现了一个官方文档里没有提及的，就是以函数形式返回的时候，还能接收第二个参数 `getters` ，即：`foo: (state, getters) => state.foo + getters.bar`
+
+##### 5.2 mapMutations
+
+```js
+export const mapMutations = normalizeNamespace((namespace, mutations) => {
+  const res = {}
+  if (__DEV__ && !isValidMap(mutations)) {
+    console.error('[vuex] mapMutations: mapper parameter must be either an Array or an Object')
+  }
+  normalizeMap(mutations).forEach(({ key, val }) => {
+    res[key] = function mappedMutation (...args) {
+      // Get the commit method from store
+      let commit = this.$store.commit
+      if (namespace) {
+        const module = getModuleByNamespace(this.$store, 'mapMutations', namespace)
+        if (!module) {
+          return
+        }
+        commit = module.context.commit
+      }
+      return typeof val === 'function'
+        ? val.apply(this, [commit].concat(args))
+        : commit.apply(this.$store, [val].concat(args))
+    }
+  })
+  return res
+})
+```
+
+`mapMutations` 与 `mapState` 的实现大体相似，主要的不同就在下面这段代码：
+
+```js
+return typeof val === 'function'
+  ? val.apply(this, [commit].concat(args))
+	: commit.apply(this.$store, [val].concat(args))
+```
+
+这里也是像 `mapState` 一样处理了函数的调用类型和普通的调用类型，例如：
+
+```js
+mapMutations({
+  foo: (commit, num) => {
+    commit('foo', num)
+  },
+  bar: 'bar'
+})
+```
+
+当是函数的调用类型时，则将 `commit` 作为第一个参数，并把额外的参数一并传入，所以才有的 `val.apply(this, [commit].concat(args))` 这段代码 ;
+
+当是普通的调用类型时，则直接执行 `commit` ，其中 `val` 对应的就是该命名空间下需要调用的 `mutations` 方法名，然后再接收额外的参数，即 `commit.apply(this.$store, [val].concat(args))`
+
+##### 5.3 mapGetters
+
+```js
+export const mapGetters = normalizeNamespace((namespace, getters) => {
+  const res = {}
+  if (__DEV__ && !isValidMap(getters)) {
+    console.error('[vuex] mapGetters: mapper parameter must be either an Array or an Object')
+  }
+  normalizeMap(getters).forEach(({ key, val }) => {
+    // The namespace has been mutated by normalizeNamespace
+    val = namespace + val
+    res[key] = function mappedGetter () {
+      if (namespace && !getModuleByNamespace(this.$store, 'mapGetters', namespace)) {
+        return
+      }
+      if (__DEV__ && !(val in this.$store.getters)) {
+        console.error(`[vuex] unknown getter: ${val}`)
+        return
+      }
+      return this.$store.getters[val]
+    }
+    // mark vuex getter for devtools
+    res[key].vuex = true
+  })
+  return res
+})
+```
+
+这个也没什么好说的了，拿到命名空间 `namespace` ，直接拼接上 `val` 通过 `this.$store.getters[val]` 进行访问。简单举个例子：
+
+第一种情况
+
+```js
+// 第一种
+mapGetters(['first/foo'])
+```
+
+这种情况下 `namespace` 被处理成了空字符串，`map` 被处理成了 `['first/foo']` ，遍历 `map` ，此时 `val = 'first/foo'` ，那么 `val = namespace + val` 处理后 `val` 仍然等于 `first/foo` ，所以最后就相当于调用 `this.$store.getters['first/foo']`
+
+再来看第二种情况
+
+```js
+// 第二种
+mapGetters('first', ['foo'])
+```
+
+ 这种情况下 `namespace` 被处理成了 `first/`，`map` 被处理成了 `['foo']` ，遍历 `map` ，此时 `val = 'foo'` ，那么 `val = namespace + val` 处理后 `val` 就等于 `first/foo` ，所以最后仍然是相当于调用 `this.$store.getters['first/foo']`
+
+##### 5.4 mapActions
+
+```js
+export const mapActions = normalizeNamespace((namespace, actions) => {
+  const res = {}
+  if (__DEV__ && !isValidMap(actions)) {
+    console.error('[vuex] mapActions: mapper parameter must be either an Array or an Object')
+  }
+  normalizeMap(actions).forEach(({ key, val }) => {
+    res[key] = function mappedAction (...args) {
+      // get dispatch function from store
+      let dispatch = this.$store.dispatch
+      if (namespace) {
+        const module = getModuleByNamespace(this.$store, 'mapActions', namespace)
+        if (!module) {
+          return
+        }
+        dispatch = module.context.dispatch
+      }
+      return typeof val === 'function'
+        ? val.apply(this, [dispatch].concat(args))
+        : dispatch.apply(this.$store, [val].concat(args))
+    }
+  })
+  return res
+})
+```
+
+简单看了一下，处理流程跟 `mapMutations` 几乎一模一样，就不多说了
+
+##### 5.5 createNamespacedHelpers
+
+```js
+export const createNamespacedHelpers = (namespace) => ({
+  mapState: mapState.bind(null, namespace),
+  mapGetters: mapGetters.bind(null, namespace),
+  mapMutations: mapMutations.bind(null, namespace),
+  mapActions: mapActions.bind(null, namespace)
+})
+```
+
+该方法是根据传入的命名空间 `namespace` 创建一组辅助函数。巧妙之处就是先通过 `bind` 函数把第一个参数先传入
+
+```js
+import { createNamespacedHelpers } from 'vuex'
+
+const { mapState, mapActions } = createNamespacedHelpers('first/second')
+
+export default {
+  computed: {
+    ...mapState({
+      a: 'a',  // 相当于 first/second/a
+      b: 'b',  // 相当于 first/second/b
+    })
+  },
+  methods: {
+    ...mapActions([
+      'foo',      // 相当于 first/second/foo
+      'bar',      // 相当于 first/second/bar
+    ])
+  }
+}
+```
+
+## 三、心得体会
+
+首先，我一直有一个阅读源码的想法，但却因为能力有限迟迟没有行动，之后在一次与大佬的交流中，我发现了自己的不足，没有深入学习，即只停留在**会用**的阶段，却没有做到知其然知其所以然。说实话，这样真的很难受，每次用某个库时，出现了某个问题只会先看考虑是否自己调用的方式有问题，然后上搜索引擎找答案，长期这样自己也很难有进步。
+
+所以，因为以下三点原因，我准备靠自己好好看一下 `Vuex` 源码：
+
+1. `Vuex` 的核心源码比较少，对于像我一样第一次阅读源码的人比较友好
+2. 深入学习了常用的库以后，在使用的时候遇到问题，可以快速地找到问题根源
+3. 不能只停留在成熟的库的表面，要学习它们的思想、技术，这样有助于自己的成长
+
+刚开始不知道自己能花多久时间看完 `Vuex` 的核心源码，我初步给自己定了 `15` 天的期限，预计每天至少看 `2` 小时。于是我把 `Vuex` 的源码 `fork` 并 `clone` 了下来，第一天简单地找了一下核心代码的位置，然后非常粗略地看了一下源码里的大致流程。同时，我去 `Vuex` 官方文档里重新仔仔细细地回顾了一下所有的核心使用方法...未完待续
 
 # 最后
 
