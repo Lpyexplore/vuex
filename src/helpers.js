@@ -8,13 +8,16 @@ import { isObject } from './util.js'
  */
 export const mapState = normalizeNamespace((namespace, states) => {
   const res = {}
+  // 判断states 是否为数组或对象
   if (__DEV__ && !isValidMap(states)) {
     console.error('[vuex] mapState: mapper parameter must be either an Array or an Object')
   }
   normalizeMap(states).forEach(({ key, val }) => {
     res[key] = function mappedState () {
+      // 获取根模块的 state 、getters
       let state = this.$store.state
       let getters = this.$store.getters
+      // 若存在命名空间，则找到对应命名空间的模块，并将 state 、getters 变成该模块上下文中的 state 、getters
       if (namespace) {
         const module = getModuleByNamespace(this.$store, 'mapState', namespace)
         if (!module) {
@@ -23,6 +26,14 @@ export const mapState = normalizeNamespace((namespace, states) => {
         state = module.context.state
         getters = module.context.getters
       }
+      /**
+       * 处理 val 为字符串和函数的情况
+       * 例如：
+       * mapState({
+       *    foo: state => state.foo,
+       *    bar: 'bar'
+       * })
+       */
       return typeof val === 'function'
         ? val.call(this, state, getters)
         : state[val]
@@ -136,23 +147,22 @@ export const createNamespacedHelpers = (namespace) => ({
 })
 
 /**
- * Normalize the map
- * normalizeMap([1, 2, 3]) => [ { key: 1, val: 1 }, { key: 2, val: 2 }, { key: 3, val: 3 } ]
- * normalizeMap({a: 1, b: 2, c: 3}) => [ { key: 'a', val: 1 }, { key: 'b', val: 2 }, { key: 'c', val: 3 } ]
+ * 标准化 map
  * @param {Array|Object} map
  * @return {Object}
  */
 function normalizeMap (map) {
+  // 如果 map 不合法，则返回空数组，避免报错
   if (!isValidMap(map)) {
     return []
   }
   return Array.isArray(map)
-    ? map.map(key => ({ key, val: key }))
-    : Object.keys(map).map(key => ({ key, val: map[key] }))
+    ? map.map(key => ({ key, val: key }))   // normalizeMap([1, 2, 3]) => [ { key: 1, val: 1 }, { key: 2, val: 2 }, { key: 3, val: 3 } ]
+    : Object.keys(map).map(key => ({ key, val: map[key] }))  // normalizeMap({a: 1, b: 2, c: 3}) => [ { key: 'a', val: 1 }, { key: 'b', val: 2 }, { key: 'c', val: 3 } ]
 }
 
 /**
- * Validate whether given map is valid or not
+ * 判断 map 是否合法，即是否为数组或对象
  * @param {*} map
  * @return {Boolean}
  */
@@ -161,16 +171,34 @@ function isValidMap (map) {
 }
 
 /**
- * Return a function expect two param contains namespace and map. it will normalize the namespace and then the param's function will handle the new namespace and the map.
+ * 返回一个函数，两个参数包含namespace和map。它将标准化命名空间，然后参数的函数将处理新的命名空间和映射
  * @param {Function} fn
  * @return {Function}
  */
 function normalizeNamespace (fn) {
   return (namespace, map) => {
+    /**
+     * 若第一个参数namespace不为字符串，则表示是普通的调用方式
+     * 例如：
+     * mapMutations(['first/second/foo', 'first/second/bar'])
+     * 
+     * mapMutations({
+     *    foo: 'first/second/foo',
+     *    bar: 'first/second/bar'
+     * })
+     */
     if (typeof namespace !== 'string') {
+      // 将传入的数组或对象赋值给映射变量map
       map = namespace
       namespace = ''
-    } else if (namespace.charAt(namespace.length - 1) !== '/') {
+    } 
+    /**
+     * 判断是否为带命名空间的绑定函数
+     * 例如：
+     * mapMutations('first/second', ['foo', 'bar'])
+     * 因为 store._modulesNamespaceMap 中存储的命名空间名称都是以 / 结尾的，所以这里要对传入的命名空间做一层处理，保证是以 / 结尾
+     */
+    else if (namespace.charAt(namespace.length - 1) !== '/') {
       namespace += '/'
     }
     return fn(namespace, map)
@@ -178,7 +206,7 @@ function normalizeNamespace (fn) {
 }
 
 /**
- * Search a special module from store by namespace. if module not exist, print error message.
+ * 获取对应命名空间的模块
  * @param {Object} store
  * @param {String} helper
  * @param {String} namespace
