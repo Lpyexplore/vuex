@@ -303,7 +303,7 @@ export default class ModuleCollection {
 
 1. `register(path, rawModule, runtime)`：注册新的模块，并根据模块的嵌套关系，将新模块添加作为对应模块的子模块
 
-- path：表示模块嵌套关系。当前为根模块时，没有任何嵌套关系，此时 `path = []` ; 当前不时根模块时，存在嵌套关系，例如上述例子中的 `ModuleA1` ，它是 `ModuleA` 的子模块 ，而 `ModuleA` 又是根模块的子模块，此时 `path = ['ModuleA', 'ModuleA1']`
+- path：表示模块嵌套关系。当前为根模块时，没有任何嵌套关系，此时 `path = []` ; 当前不是根模块时，存在嵌套关系，例如上述例子中的 `ModuleA1` ，它是 `ModuleA` 的子模块 ，而 `ModuleA` 又是根模块的子模块，此时 `path = ['ModuleA', 'ModuleA1']`
 - rawModule：表示模块对象，此时是一个对象类型
 - runtime：表示程序运行时
 
@@ -1106,7 +1106,7 @@ this.$store.commit({
 
 在处理完参数以后，根据 `type` 从 `store._mutations` 上获取到 `entry` ，前面分析过了，`mutations` 方法是以数组形式存储的，所以可能有多个方法。然后在 `_withCommit` 方法中遍历 `entry` 依次执行 `mutations` 方法，这是因为 `Vuex` 规定 `state` 的改变都要通过 `mutations` 方法，`store._committing` 这个属性就是用来判断当前是否处于调用 `mutations` 方法的，当 `state` 值改变时，会先去判断 `store._committing` 是否为 `true` ，若不为 `true` ，则表示 `state` 的值改变没有经过 `mutations` 方法，于是会打印警告⚠️ 信息
 
-而 `this._subscribers` 这段代码我暂时还不清楚时干什么的，通过词义，目测应该是一个存放订阅的东西吧，就先放着不管了，等后续回来再看
+而 `this._subscribers` 这段代码我暂时还不清楚是干什么的，通过词义，目测应该是一个存放订阅的东西吧，就先放着不管了，等后续回来再看
 
 ##### 3.4.3 访问 actions
 
