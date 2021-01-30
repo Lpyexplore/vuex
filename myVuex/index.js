@@ -1,5 +1,5 @@
 import { install, Store } from './store'
-import { mapState, mapMutations, mapActions, mapGetters, createNamespaceHelpers } from './helper.js'
+import { mapState, mapMutations, mapActions, mapGetters, createNamespaceHelpers } from './helpers.js'
 
 export default {
     install,
