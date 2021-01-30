@@ -16,6 +16,7 @@ export class Store{
         this._actions = {}
         this.wrappedGetters = {}
         this.localGettersCache = {}
+        this._modulesNamespaceMap = {}
         this._module = new ModuleCollection(options)
         const state = this._module.root.state
         const store = this
@@ -59,6 +60,8 @@ export class Store{
     installModule(store, path, module) {
         let isRoot = !path.length
         let namespaced = this._module.getNamespaced(path)
+
+        if(module.namespaced) store._modulesNamespaceMap[namespaced] = module;
 
         if(!isRoot) {
             const parent = this._module.getModule(path.slice(0, -1))
