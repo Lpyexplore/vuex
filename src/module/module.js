@@ -34,11 +34,12 @@ export default class Module {
     return this._children[key]
   }
 
-  // 是否存在名称为key的子模块
+  // 是否存在名称为key的子模块
   hasChild (key) {
     return key in this._children
   }
 
+  // 将当前模块的命名空间更新到指定模块的命名空间中，并同时更新一下actions、mutations、getters的调用来源
   update (rawModule) {
     this._rawModule.namespaced = rawModule.namespaced
     if (rawModule.actions) {
